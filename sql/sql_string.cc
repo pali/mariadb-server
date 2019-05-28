@@ -1105,6 +1105,7 @@ bool String::append_for_single_quote(const char *st, size_t len)
     case '\n':   APPEND(STRING_WITH_LEN("\\n"));
     case '\r':   APPEND(STRING_WITH_LEN("\\r"));
     case '\032': APPEND(STRING_WITH_LEN("\\Z"));
+    case '\t':   APPEND(STRING_WITH_LEN("\\t"));
     default:     APPEND(c);
     }
   }
@@ -1195,4 +1196,15 @@ uint convert_to_printable(char *to, size_t to_len,
   else
     *t= '\0';
   return (uint) (t - to);
+}
+
+bool String::append_semi_hex(const char *s, uint len, CHARSET_INFO *cs)
+{
+  size_t dst_len= len * 4 + 1; //extra length for the '\0' character
+  if (reserve(dst_len))
+    return true;
+  uint nbytes= convert_to_printable(Ptr + str_length, dst_len, s, len, cs);
+  DBUG_ASSERT((ulonglong) str_length + nbytes < UINT32_MAX);
+  str_length+= nbytes;
+  return false;
 }
