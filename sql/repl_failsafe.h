@@ -45,4 +45,6 @@ int register_slave(THD* thd, uchar* packet, size_t packet_length);
 void unregister_slave(THD* thd, bool only_mine, bool need_mutex);
 
 #endif /* HAVE_REPLICATION */
+
+extern volatile int32 binlog_dump_thread_count;
 #endif /* REPL_FAILSAFE_INCLUDED */

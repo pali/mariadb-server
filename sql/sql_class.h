@@ -2203,6 +2203,7 @@ public:
     rpl_io_thread_info *rpl_io_info;
     rpl_sql_thread_info *rpl_sql_info;
   } system_thread_info;
+  bool rpl_dump_thread;
 
   void reset_for_next_command(bool do_clear_errors= 1);
   /*

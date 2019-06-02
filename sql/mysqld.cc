@@ -822,6 +822,7 @@ static char **defaults_argv;
 static int remaining_argc;
 /** Remaining command line arguments (arguments), filtered by handle_options().*/
 static char **remaining_argv;
+static volatile bool shutdown_wait_for_slaves;
 
 int orig_argc;
 char **orig_argv;
@@ -1610,6 +1611,68 @@ static void end_ssl();
 ** Code to end mysqld
 ****************************************************************************/
 
+static bool is_binlog_dump_thread(THD *thd)
+{
+  bool rc;
+
+  mysql_mutex_lock(&thd->LOCK_thd_data);
+  rc= thd->rpl_dump_thread;
+  mysql_mutex_unlock(&thd->LOCK_thd_data);
+
+  return rc;
+}
+
+/*
+  KILL all threads from the argument list and then wait for *all* threads exit.
+*/
+static void kill_and_wait_binlog_dump_threads(I_List<THD> &dump_threads)
+{
+  mysql_mutex_lock(&LOCK_thread_count); // For unlink from list
+
+  I_List_iterator<THD> it(dump_threads);
+  THD *tmp;
+
+  while ((tmp=it++))
+  {
+    DBUG_ASSERT(is_binlog_dump_thread(tmp));
+
+    tmp->set_killed(shutdown_wait_for_slaves? KILL_SERVER : KILL_SERVER_HARD);
+
+    if (tmp->mysys_var)
+    {
+      tmp->mysys_var->abort=1;
+      mysql_mutex_lock(&tmp->mysys_var->mutex);
+      if (tmp->mysys_var->current_cond)
+      {
+        uint i;
+        for (i=0; i < 2; i++)
+        {
+          int ret= mysql_mutex_trylock(tmp->mysys_var->current_mutex);
+          mysql_cond_broadcast(tmp->mysys_var->current_cond);
+          if (!ret)
+          {
+            /* Thread has surely got the signal, unlock and abort */
+            mysql_mutex_unlock(tmp->mysys_var->current_mutex);
+            break;
+          }
+          sleep(1);
+        }
+      }
+      mysql_mutex_unlock(&tmp->mysys_var->mutex);
+    }
+  }
+
+  /* Wait for the threads exit. */
+  while (thread_count > 0)
+  {
+    mysql_cond_wait(&COND_thread_count, &LOCK_thread_count);
+    DBUG_PRINT("quit",("Binlog dump thread died (count=%u)", thread_count));
+  }
+  mysql_mutex_unlock(&LOCK_thread_count);
+
+  DBUG_ASSERT(binlog_dump_thread_count == 0);
+}
+
 static void close_connections(void)
 {
 #ifdef EXTRA_DEBUG
@@ -1718,8 +1781,12 @@ static void close_connections(void)
   {
     DBUG_PRINT("quit",("Informing thread %ld that it's time to die",
 		       (ulong) tmp->thread_id));
-    /* We skip slave threads on this first loop through. */
-    if (tmp->slave_thread)
+    /*
+      We skip the slave and optionally binlog dump threads on this
+      first loop through.
+    */
+    if (tmp->slave_thread ||
+        (shutdown_wait_for_slaves && is_binlog_dump_thread(tmp)))
       continue;
 
     /* cannot use 'continue' inside DBUG_EXECUTE_IF()... */
@@ -1781,7 +1848,10 @@ static void close_connections(void)
   */
   DBUG_PRINT("info", ("thread_count: %d", thread_count));
 
-  for (int i= 0; *(volatile int32*) &thread_count && i < 1000; i++)
+  for (int i= 0;
+       *(volatile int32*) &thread_count -
+         shutdown_wait_for_slaves * binlog_dump_thread_count && i < 1000;
+       i++)
     my_sleep(20000);
 
   /*
@@ -1789,7 +1859,7 @@ static void close_connections(void)
     This will ensure that threads that are waiting for a command from the
     client on a blocking read call are aborted.
   */
-
+  I_List<THD> binlog_dump_threads;
   for (;;)
   {
     mysql_mutex_lock(&LOCK_thread_count); // For unlink from list
@@ -1798,6 +1868,14 @@ static void close_connections(void)
       mysql_mutex_unlock(&LOCK_thread_count);
       break;
     }
+    /* Leave alone slow shutdown binlog dump threads in a separte list. */
+    if (shutdown_wait_for_slaves && is_binlog_dump_thread(tmp))
+    {
+      binlog_dump_threads.append(tmp);
+      mysql_mutex_unlock(&LOCK_thread_count);
+      continue;
+    }
+
 #ifndef __bsdi__				// Bug in BSDI kernel
     if (tmp->vio_ok())
     {
@@ -1848,16 +1926,23 @@ static void close_connections(void)
     DBUG_PRINT("quit",("Unlocking LOCK_thread_count"));
     mysql_mutex_unlock(&LOCK_thread_count);
   }
+
   end_slave();
-  /* All threads has now been aborted */
+
+  /* All but binlog dump threads have now been aborted */
   DBUG_PRINT("quit",("Waiting for threads to die (count=%u)",thread_count));
+
   mysql_mutex_lock(&LOCK_thread_count);
-  while (thread_count || service_thread_count)
+  while (thread_count > shutdown_wait_for_slaves * binlog_dump_thread_count ||
+         service_thread_count)
   {
     mysql_cond_wait(&COND_thread_count, &LOCK_thread_count);
     DBUG_PRINT("quit",("One thread died (count=%u)",thread_count));
   }
   mysql_mutex_unlock(&LOCK_thread_count);
+
+  if (shutdown_wait_for_slaves)
+    kill_and_wait_binlog_dump_threads(binlog_dump_threads);
 
   DBUG_PRINT("quit",("close_connections thread"));
   DBUG_VOID_RETURN;
@@ -1924,6 +2009,21 @@ static void set_shutdown_user(THD *thd)
 void kill_mysql(THD *thd)
 {
   DBUG_ENTER("kill_mysql");
+
+  DBUG_EXECUTE_IF("mysql_admin_shutdown_wait_for_slaves",
+                  thd->lex->is_shutdown_wait_for_slaves= true;);
+  DBUG_EXECUTE_IF("simulate_delay_at_shutdown",
+                  {
+                    DBUG_ASSERT(binlog_dump_thread_count == 3);
+                    const char act[]=
+                      "now "
+                      "SIGNAL greetings_from_kill_mysql";
+                    DBUG_ASSERT(!debug_sync_set_action(thd,
+                                                       STRING_WITH_LEN(act)));
+                  };);
+
+  if (thd->lex->is_shutdown_wait_for_slaves)
+    shutdown_wait_for_slaves= true;
 
   if (thd)
     set_shutdown_user(thd);
@@ -2871,6 +2971,11 @@ void close_connection(THD *thd, uint sql_errno)
     sleep(0); /* Workaround to avoid tailcall optimisation */
   }
   mysql_audit_notify_connection_disconnect(thd, sql_errno);
+
+  mysql_mutex_lock(&thd->LOCK_thd_data);
+  thd->rpl_dump_thread= false;
+  mysql_mutex_unlock(&thd->LOCK_thd_data);
+
   DBUG_VOID_RETURN;
 }
 #endif /* EMBEDDED_LIBRARY */
@@ -2911,12 +3016,13 @@ void dec_connection_count(scheduler_functions *scheduler)
   to 0 by a previous unlink_thd() call.
 
   We should only signal COND_thread_count if both variables are 0,
-  false positives are ok.
+  false positives are ok,
+  or when deletion is initiated by a wait-for-slave shutdown mode.
 */
 
 void signal_thd_deleted()
 {
-  if (!thread_count && !service_thread_count)
+  if ((!thread_count && !service_thread_count) || shutdown_wait_for_slaves)
   {
     /* Signal close_connections() that all THD's are freed */
     mysql_mutex_lock(&LOCK_thread_count);

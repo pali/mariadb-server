@@ -27,6 +27,8 @@
 #include "mariadb.h"
 #include "sql_priv.h"
 #include "sql_parse.h"                          // check_access
+volatile int32 binlog_dump_thread_count;
+
 #ifdef HAVE_REPLICATION
 
 #include "repl_failsafe.h"
@@ -40,7 +42,6 @@
 
 #define SLAVE_LIST_CHUNK 128
 #define SLAVE_ERRMSG_SIZE (FN_REFLEN+64)
-
 
 ulong rpl_status=RPL_NULL;
 mysql_mutex_t LOCK_rpl_status;
@@ -91,6 +92,8 @@ void unregister_slave(THD* thd, bool only_mine, bool need_mutex)
   uint32 thd_server_id= thd->variables.server_id;
   if (thd_server_id)
   {
+    bool do_dec_dump_count= false;
+
     if (need_mutex)
       mysql_mutex_lock(&LOCK_slave_list);
 
@@ -98,10 +101,21 @@ void unregister_slave(THD* thd, bool only_mine, bool need_mutex)
     if ((old_si = (SLAVE_INFO*)my_hash_search(&slave_list,
                                               (uchar*)&thd_server_id, 4)) &&
 	(!only_mine || old_si->thd == thd))
-    my_hash_delete(&slave_list, (uchar*)old_si);
+    {
+      my_hash_delete(&slave_list, (uchar*)old_si);
+      do_dec_dump_count= true;
+    }
 
     if (need_mutex)
       mysql_mutex_unlock(&LOCK_slave_list);
+
+    if (do_dec_dump_count)
+    {
+      my_atomic_add32(&binlog_dump_thread_count, -1);
+      mysql_mutex_lock(&thd->LOCK_thd_data);
+      thd->rpl_dump_thread= false;
+      mysql_mutex_unlock(&thd->LOCK_thd_data);
+    }
   }
 }
 
@@ -152,6 +166,12 @@ int register_slave(THD* thd, uchar* packet, size_t packet_length)
   unregister_slave(thd,0,0);
   res= my_hash_insert(&slave_list, (uchar*) si);
   mysql_mutex_unlock(&LOCK_slave_list);
+
+  my_atomic_add32(&binlog_dump_thread_count, 1);
+  mysql_mutex_lock(&thd->LOCK_thd_data);
+  thd->rpl_dump_thread= true;
+  mysql_mutex_unlock(&thd->LOCK_thd_data);
+
   return res;
 
 err:

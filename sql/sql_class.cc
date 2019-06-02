@@ -600,7 +600,7 @@ extern "C" void thd_kill_timeout(THD* thd)
 THD::THD(my_thread_id id, bool is_wsrep_applier)
   :Statement(&main_lex, &main_mem_root, STMT_CONVENTIONAL_EXECUTION,
              /* statement id */ 0),
-   rli_fake(0), rgi_fake(0), rgi_slave(NULL),
+   rli_fake(0), rgi_fake(0), rgi_slave(NULL), rpl_dump_thread(false),
    protocol_text(this), protocol_binary(this),
    m_current_stage_key(0),
    in_sub_stmt(0), log_all_errors(0),
