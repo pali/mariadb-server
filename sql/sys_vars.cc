@@ -3567,11 +3567,12 @@ static Sys_var_charptr Sys_ssl_crlpath(
 
 static const char *tls_version_names[]=
 {
-  "TLSv1.0", "TLSv1.1",
-#ifdef TLS1_2_VERSION
+  "TLSv1.0",
+  "TLSv1.1",
+#if defined(TLS1_2_VERSION) || defined(TLSv1_2_method)
   "TLSv1.2",
 #endif
-#ifdef TLS1_3_VERSION
+#if defined(TLS1_3_VERSION)
   "TLSv1.3",
 #endif
   0
@@ -3590,10 +3591,10 @@ static Sys_var_set Sys_tls_version(
        READ_ONLY GLOBAL_VAR(tls_version), CMD_LINE(REQUIRED_ARG),
        tls_version_names,
        DEFAULT(VIO_TLSv1_1
-#ifdef TLS1_2_VERSION
+#if defined(TLS1_2_VERSION) || defined(TLSv1_2_method)
                | VIO_TLSv1_2
 #endif
-#ifdef TLS1_3_VERSION
+#if defined(TLS1_3_VERSION)
                | VIO_TLSv1_3
 #endif
        ));
