@@ -3569,12 +3569,8 @@ static const char *tls_version_names[]=
 {
   "TLSv1.0",
   "TLSv1.1",
-#if defined(TLS1_2_VERSION) || defined(TLSv1_2_method)
   "TLSv1.2",
-#endif
-#if defined(TLS1_3_VERSION)
   "TLSv1.3",
-#endif
   0
 };
 
@@ -3590,14 +3586,7 @@ static Sys_var_set Sys_tls_version(
        "TLS protocol version for secure connections.",
        READ_ONLY GLOBAL_VAR(tls_version), CMD_LINE(REQUIRED_ARG),
        tls_version_names,
-       DEFAULT(VIO_TLSv1_1
-#if defined(TLS1_2_VERSION) || defined(TLSv1_2_method)
-               | VIO_TLSv1_2
-#endif
-#if defined(TLS1_3_VERSION)
-               | VIO_TLSv1_3
-#endif
-       ));
+       DEFAULT(VIO_TLSv1_1 | VIO_TLSv1_2 | VIO_TLSv1_3));
 
 static Sys_var_mybool Sys_standard_compliant_cte(
        "standard_compliant_cte",
