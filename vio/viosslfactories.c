@@ -184,7 +184,7 @@ static int wolfssl_send(WOLFSSL* ssl, char* buf, int sz, void* vio)
 }
 #endif /* HAVE_WOLFSSL */
 
-static long vio_tls_protocol_options(long tls_version)
+static long vio_tls_protocol_options(ulonglong tls_version)
 {
    long tls_protocol_flags=
 #ifdef TLS1_3_VERSION
@@ -227,7 +227,7 @@ new_VioSSLFd(const char *key_file, const char *cert_file,
              const char *cipher, my_bool is_client_method,
              enum enum_ssl_init_error *error,
              const char *crl_file, const char *crl_path,
-	           long tls_version)
+	           ulonglong tls_version)
 {
   DH *dh;
   struct st_VioSSLFd *ssl_fd;
