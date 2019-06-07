@@ -205,7 +205,7 @@ static long vio_tls_protocol_options(long tls_version)
     disabled_tls_protocols&= ~SSL_OP_NO_TLSv1;
   if (tls_version & VIO_TLSv1_1)
     disabled_tls_protocols&= ~SSL_OP_NO_TLSv1_1;
-#ifdef TLS1_2_VERSION
+#if defined(TLS1_2_VERSION) || defined(HAVE_WOLFSSL)
   if (tls_version & VIO_TLSv1_2)
     disabled_tls_protocols&= ~SSL_OP_NO_TLSv1_2;
 #endif
